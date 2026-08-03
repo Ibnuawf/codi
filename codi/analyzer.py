@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import math
 import os
+import statistics
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,7 +49,7 @@ class FileMetrics:
         """Mean cyclomatic complexity across the file's functions."""
         if not self.functions:
             return 0.0
-        return sum(f.complexity for f in self.functions) / len(self.functions)
+        return statistics.fmean(f.complexity for f in self.functions)
 
     @property
     def max_complexity(self) -> int:
@@ -184,6 +185,20 @@ def analyze_file(path: Path, display_path: str | None = None) -> FileMetrics:
             )
         )
     return metrics
+
+
+def read_sources(root: Path, files: list[FileMetrics]) -> dict[str, str]:
+    """Map each analyzed file's display path back to its source text."""
+    base = root if root.is_dir() else root.parent
+    sources = {}
+    for fm in files:
+        try:
+            sources[fm.path] = (base / fm.path).read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            pass
+    return sources
 
 
 def analyze_project(root: Path) -> list[FileMetrics]:

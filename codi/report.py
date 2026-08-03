@@ -38,6 +38,28 @@ tr:last-child td { border-bottom:none; }
 .ok { color:#22c55e; }
 .overflow { overflow-x:auto; }
 footer { margin-top:2.5rem; color:var(--muted); font-size:.8rem; }
+th.sortable { cursor:pointer; user-select:none; }
+th.sortable:hover { color:var(--accent); }
+"""
+
+_SORT_JS = """
+document.querySelectorAll('table').forEach(table => {
+  table.querySelectorAll('th').forEach((th, col) => {
+    th.classList.add('sortable');
+    let asc = false;
+    th.addEventListener('click', () => {
+      asc = !asc;
+      const rows = [...table.querySelectorAll('tr')].slice(1);
+      rows.sort((a, b) => {
+        const x = a.cells[col]?.innerText ?? '', y = b.cells[col]?.innerText ?? '';
+        const nx = parseFloat(x), ny = parseFloat(y);
+        const cmp = (!isNaN(nx) && !isNaN(ny)) ? nx - ny : x.localeCompare(y);
+        return asc ? cmp : -cmp;
+      });
+      rows.forEach(r => table.appendChild(r));
+    });
+  });
+});
 """
 
 
@@ -68,6 +90,61 @@ def _grade_pill(grade: str) -> str:
     return f'<span class="g" style="background:{_GRADE_COLORS.get(grade, "#94a3b8")}">{grade}</span>'
 
 
+def _hotspot_rows(health: HealthReport) -> str:
+    """Table rows for the refactoring-hotspot section."""
+    e = html.escape
+    return "".join(
+        f"<tr><td>{e(h.function.qualname)}</td><td class='muted'>{e(h.file)}:{h.function.lineno}</td>"
+        f"<td>{_grade_pill(h.function.grade)}</td><td>{h.function.complexity}</td>"
+        f"<td>{h.function.length}</td><td class='muted'>{e('; '.join(h.reasons))}</td></tr>"
+        for h in health.hotspots
+    ) or "<tr><td colspan='6' class='ok'>No risky functions found — clean codebase.</td></tr>"
+
+
+def _file_rows(files: list[FileMetrics]) -> str:
+    """Table rows for the per-file metrics section."""
+    e = html.escape
+    max_sloc = max((f.sloc for f in files), default=1) or 1
+    return "".join(
+        f"<tr><td>{e(f.path)}</td><td>{f.sloc}</td>"
+        f"<td><div class='bar'><i style='width:{100 * f.sloc / max_sloc:.0f}%'></i></div></td>"
+        f"<td>{len(f.functions)}</td><td>{f.avg_complexity:.1f}</td><td>{f.max_complexity}</td>"
+        f"<td>{f.maintainability_index:.0f}</td>"
+        f"<td>{f.docstring_coverage:.0%}</td></tr>"
+        for f in sorted(files, key=lambda x: x.sloc, reverse=True)
+    )
+
+
+def _dependency_rows(graph: DependencyGraph) -> str:
+    """Table rows for the internal-dependencies section."""
+    e = html.escape
+    fan_in, fan_out = graph.fan_in(), graph.fan_out()
+    return "".join(
+        f"<tr><td>{e(mod)}</td><td>{fan_in.get(mod, 0)}</td><td>{fan_out.get(mod, 0)}</td>"
+        f"<td class='muted'>{e(', '.join(sorted(targets)) or '—')}</td></tr>"
+        for mod, targets in sorted(graph.edges.items(), key=lambda kv: -fan_in.get(kv[0], 0))
+    )
+
+
+def _clone_rows(health: HealthReport) -> str:
+    """Table rows for the duplicated-functions section."""
+    e = html.escape
+    return "".join(
+        f"<tr><td>{len(g.sites)}</td><td>{g.size}</td>"
+        f"<td class='muted'>{e(', '.join(f'{s.file}:{s.lineno} {s.qualname}' for s in g.sites))}</td></tr>"
+        for g in health.clone_groups
+    ) or "<tr><td colspan='3' class='ok'>✓ No duplicated functions detected.</td></tr>"
+
+
+def _dead_rows(health: HealthReport) -> str:
+    """Table rows for the possibly-dead-code section."""
+    e = html.escape
+    return "".join(
+        f"<tr><td>{e(d.qualname)}</td><td class='muted'>{e(d.file)}:{d.lineno}</td></tr>"
+        for d in health.dead_functions
+    ) or "<tr><td colspan='2' class='ok'>✓ No unreferenced functions detected.</td></tr>"
+
+
 def render_html(
     target: str,
     files: list[FileMetrics],
@@ -77,30 +154,11 @@ def render_html(
     """Render the full analysis as one self-contained HTML page."""
     e = html.escape
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    hotspot_rows = "".join(
-        f"<tr><td>{e(h.function.qualname)}</td><td class='muted'>{e(h.file)}:{h.function.lineno}</td>"
-        f"<td>{_grade_pill(h.function.grade)}</td><td>{h.function.complexity}</td>"
-        f"<td>{h.function.length}</td><td class='muted'>{e('; '.join(h.reasons))}</td></tr>"
-        for h in health.hotspots
-    ) or "<tr><td colspan='6' class='ok'>No risky functions found — clean codebase.</td></tr>"
-
-    max_sloc = max((f.sloc for f in files), default=1) or 1
-    file_rows = "".join(
-        f"<tr><td>{e(f.path)}</td><td>{f.sloc}</td>"
-        f"<td><div class='bar'><i style='width:{100 * f.sloc / max_sloc:.0f}%'></i></div></td>"
-        f"<td>{len(f.functions)}</td><td>{f.avg_complexity:.1f}</td>"
-        f"<td>{f.maintainability_index:.0f}</td>"
-        f"<td>{f.docstring_coverage:.0%}</td></tr>"
-        for f in sorted(files, key=lambda x: x.sloc, reverse=True)
-    )
-
-    fan_in = graph.fan_in()
-    dep_rows = "".join(
-        f"<tr><td>{e(mod)}</td><td>{fan_in.get(mod, 0)}</td><td>{len(targets)}</td>"
-        f"<td class='muted'>{e(', '.join(sorted(targets)) or '—')}</td></tr>"
-        for mod, targets in sorted(graph.edges.items(), key=lambda kv: -fan_in.get(kv[0], 0))
-    )
+    hotspot_rows = _hotspot_rows(health)
+    file_rows = _file_rows(files)
+    dep_rows = _dependency_rows(graph)
+    clone_rows = _clone_rows(health)
+    dead_rows = _dead_rows(health)
 
     cycles_html = (
         "".join(f"<div class='cycle'>{e(' → '.join(c))}</div>" for c in health.cycles)
@@ -131,22 +189,31 @@ def render_html(
 {_card("Avg complexity", f"{health.avg_complexity:.2f}")}
 {_card("Docstring coverage", f"{health.docstring_coverage:.0%}")}
 {_card("Import cycles", str(len(health.cycles)))}
+{_card("Duplication", f"{health.duplication:.0%}")}
+{_card("Dead functions", str(len(health.dead_functions)))}
 </div>
 
 <h2>Refactoring hotspots</h2>
 <div class="overflow"><table><tr><th>Function</th><th>Location</th><th>Grade</th><th>CC</th><th>Lines</th><th>Why</th></tr>{hotspot_rows}</table></div>
 
 <h2>Files</h2>
-<div class="overflow"><table><tr><th>File</th><th>SLOC</th><th></th><th>Funcs</th><th>Avg CC</th><th>MI</th><th>Docs</th></tr>{file_rows}</table></div>
+<div class="overflow"><table><tr><th>File</th><th>SLOC</th><th></th><th>Funcs</th><th>Avg CC</th><th>Max CC</th><th>MI</th><th>Docs</th></tr>{file_rows}</table></div>
 
 <h2>Internal dependencies</h2>
 <div class="overflow"><table><tr><th>Module</th><th>Fan-in</th><th>Fan-out</th><th>Imports</th></tr>{dep_rows}</table></div>
+
+<h2>Duplicated functions</h2>
+<div class="overflow"><table><tr><th>Copies</th><th>Statements</th><th>Locations</th></tr>{clone_rows}</table></div>
+
+<h2>Possibly dead code</h2>
+<div class="overflow"><table><tr><th>Function</th><th>Location</th></tr>{dead_rows}</table></div>
 
 <h2>Circular imports</h2>
 {cycles_html}
 {errors_html}
 
 <footer>Generated by <b>Codi</b> — zero-dependency Python code-health analyzer.</footer>
+<script>{_SORT_JS}</script>
 </div></body></html>"""
 
 
@@ -167,7 +234,23 @@ def render_json(
                 "docstring_coverage": health.docstring_coverage,
                 "cycles": health.cycles,
                 "parse_errors": health.parse_errors,
+                "duplication": health.duplication,
             },
+            "clones": [
+                {
+                    "copies": len(g.sites),
+                    "statements": g.size,
+                    "sites": [
+                        {"file": s.file, "function": s.qualname, "line": s.lineno}
+                        for s in g.sites
+                    ],
+                }
+                for g in health.clone_groups
+            ],
+            "dead_functions": [
+                {"file": d.file, "function": d.qualname, "line": d.lineno}
+                for d in health.dead_functions
+            ],
             "hotspots": [
                 {
                     "file": h.file,

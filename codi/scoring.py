@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .analyzer import FileMetrics, FunctionMetrics
+from .deadcode import DeadFunction
+from .duplication import CloneGroup, duplication_ratio
 from .graph import DependencyGraph
 
 
@@ -32,6 +34,9 @@ class HealthReport:
     hotspots: list[Hotspot]
     cycles: list[list[str]]
     parse_errors: list[str]
+    clone_groups: list[CloneGroup] = field(default_factory=list)
+    dead_functions: list[DeadFunction] = field(default_factory=list)
+    duplication: float = 0.0
 
 
 def _grade(score: float) -> str:
@@ -74,36 +79,60 @@ def rank_hotspots(files: list[FileMetrics], limit: int = 15) -> list[Hotspot]:
     return spots[:limit]
 
 
-def compute_health(files: list[FileMetrics], graph: DependencyGraph) -> HealthReport:
-    """Blend complexity, documentation, structure and errors into one score."""
+def _function_ratio(functions: list[FunctionMetrics], predicate, default: float) -> float:
+    """Share of functions matching predicate, or default when there are none."""
+    if not functions:
+        return default
+    return sum(1 for fn in functions if predicate(fn)) / len(functions)
+
+
+def _blend_score(avg_cx: float, worst_share: float, doc_cov: float,
+                 cycle_count: int, dup: float, dead_share: float,
+                 error_count: int) -> float:
+    """Weighted 0-100 blend of all quality components.
+
+    Weights (max 100): complexity 35, hotspot density 20, documentation 15,
+    import structure 10, duplication 10, dead code 10, minus 5 per
+    unparseable file.
+    """
+    components = (
+        max(0.0, 35.0 - (avg_cx - 1.0) * 5.5),
+        max(0.0, 20.0 * (1.0 - worst_share * 4.0)),
+        15.0 * doc_cov,
+        max(0.0, 10.0 - 4.0 * cycle_count),
+        max(0.0, 10.0 * (1.0 - dup * 5.0)),
+        max(0.0, 10.0 * (1.0 - dead_share * 5.0)),
+    )
+    return max(0.0, min(100.0, sum(components) - 5.0 * error_count))
+
+
+def compute_health(
+    files: list[FileMetrics],
+    graph: DependencyGraph,
+    clones: list[CloneGroup] | None = None,
+    dead: list[DeadFunction] | None = None,
+) -> HealthReport:
+    """Blend complexity, docs, structure, duplication and dead code into one score."""
+    clones = clones or []
+    dead = dead or []
     parsed = [f for f in files if f.parse_error is None]
     all_functions = [fn for f in parsed for fn in f.functions]
     total_sloc = sum(f.sloc for f in files)
-    total_comments = sum(f.comment_lines for f in files)
 
     avg_cx = (
         sum(fn.complexity for fn in all_functions) / len(all_functions)
         if all_functions else 1.0
     )
-    doc_cov = (
-        sum(fn.has_docstring for fn in all_functions) / len(all_functions)
-        if all_functions else 1.0
-    )
-    comment_ratio = total_comments / max(total_sloc, 1)
+    doc_cov = _function_ratio(all_functions, lambda fn: fn.has_docstring, 1.0)
+    worst_share = _function_ratio(all_functions, lambda fn: fn.complexity > 10, 0.0)
+    comment_ratio = sum(f.comment_lines for f in files) / max(total_sloc, 1)
     cycles = graph.find_cycles()
-    worst_share = (
-        sum(fn.complexity > 10 for fn in all_functions) / len(all_functions)
-        if all_functions else 0.0
-    )
+    dup = duplication_ratio(clones, len(all_functions))
+    dead_share = len(dead) / max(len(all_functions), 1)
+    error_count = sum(f.parse_error is not None for f in files)
 
-    # Score components (sum of maximums = 100)
-    complexity_score = max(0.0, 40.0 - (avg_cx - 1.0) * 6.0)      # 40 pts
-    hotspot_score = max(0.0, 25.0 * (1.0 - worst_share * 4.0))    # 25 pts
-    doc_score = 20.0 * doc_cov                                     # 20 pts
-    structure_score = max(0.0, 15.0 - 5.0 * len(cycles))           # 15 pts
-    penalty = 5.0 * sum(f.parse_error is not None for f in files)
-
-    score = max(0.0, min(100.0, complexity_score + hotspot_score + doc_score + structure_score - penalty))
+    score = _blend_score(avg_cx, worst_share, doc_cov, len(cycles),
+                         dup, dead_share, error_count)
 
     return HealthReport(
         score=round(score, 1),
@@ -118,4 +147,7 @@ def compute_health(files: list[FileMetrics], graph: DependencyGraph) -> HealthRe
         hotspots=rank_hotspots(parsed),
         cycles=cycles,
         parse_errors=[f.path for f in files if f.parse_error is not None],
+        clone_groups=clones,
+        dead_functions=dead,
+        duplication=round(dup, 3),
     )
