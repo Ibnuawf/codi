@@ -9,6 +9,7 @@ import statistics
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .cognitive import cognitive_complexity, halstead_volume, maintainability_index
 from .complexity import complexity_grade, function_complexity
 
 SKIP_DIRS = {
@@ -31,6 +32,8 @@ class FunctionMetrics:
     args: int
     has_docstring: bool
     is_async: bool
+    cognitive: int = 0
+    is_annotated: bool = False
 
 
 @dataclass
@@ -43,6 +46,7 @@ class FileMetrics:
     classes: int = 0
     imports: list[str] = field(default_factory=list)
     parse_error: str | None = None
+    halstead: float = 0.0
 
     @property
     def avg_complexity(self) -> float:
@@ -56,30 +60,31 @@ class FileMetrics:
         """Highest cyclomatic complexity in the file."""
         return max((f.complexity for f in self.functions), default=0)
 
+    def _share(self, predicate) -> float:
+        """Share of this file's functions matching predicate (1.0 when none)."""
+        if not self.functions:
+            return 1.0
+        return sum(1 for f in self.functions if predicate(f)) / len(self.functions)
+
     @property
     def docstring_coverage(self) -> float:
         """Share of functions in the file that carry a docstring."""
-        if not self.functions:
-            return 1.0
-        return sum(f.has_docstring for f in self.functions) / len(self.functions)
+        return self._share(lambda f: f.has_docstring)
+
+    @property
+    def annotation_coverage(self) -> float:
+        """Share of functions with complete type hints (args + return)."""
+        return self._share(lambda f: f.is_annotated)
 
     @property
     def maintainability_index(self) -> float:
-        """Simplified maintainability index (0-100, higher is better).
+        """Classic maintainability index (0-100, higher is better).
 
-        Based on the classic MI formula using SLOC and average complexity
-        as proxies for Halstead volume, normalised to 0-100.
+        Uses real Halstead volume when available, falling back to a
+        SLOC-based proxy for files analyzed without it.
         """
-        if self.sloc == 0:
-            return 100.0
-        volume = self.sloc * math.log2(max(self.sloc, 2))
-        mi = (
-            171
-            - 5.2 * math.log(max(volume, 1))
-            - 0.23 * self.avg_complexity
-            - 16.2 * math.log(max(self.sloc, 1))
-        )
-        return max(0.0, min(100.0, mi * 100 / 171))
+        volume = self.halstead or self.sloc * math.log2(max(self.sloc, 2))
+        return maintainability_index(volume, self.avg_complexity, self.sloc)
 
 
 def discover_python_files(root: Path) -> list[Path]:
@@ -141,6 +146,18 @@ def _extract_imports(tree: ast.AST) -> list[str]:
     return imports
 
 
+def _is_fully_annotated(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True when every parameter (except self/cls) and the return are typed."""
+    args = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+    params = [a for a in args if a.arg not in ("self", "cls")]
+    for extra in (node.args.vararg, node.args.kwarg):
+        if extra is not None:
+            params.append(extra)
+    if any(a.annotation is None for a in params):
+        return False
+    return node.returns is not None
+
+
 def analyze_file(path: Path, display_path: str | None = None) -> FileMetrics:
     """Full metrics for a single Python file."""
     display = display_path or str(path)
@@ -164,6 +181,7 @@ def analyze_file(path: Path, display_path: str | None = None) -> FileMetrics:
     metrics.classes = sum(
         isinstance(n, ast.ClassDef) for n in ast.walk(tree)
     )
+    metrics.halstead = halstead_volume(tree)
 
     for node, qual in _walk_functions(tree):
         score = function_complexity(node)
@@ -182,6 +200,8 @@ def analyze_file(path: Path, display_path: str | None = None) -> FileMetrics:
                 + len(node.args.kwonlyargs),
                 has_docstring=ast.get_docstring(node) is not None,
                 is_async=isinstance(node, ast.AsyncFunctionDef),
+                cognitive=cognitive_complexity(node),
+                is_annotated=_is_fully_annotated(node),
             )
         )
     return metrics

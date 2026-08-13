@@ -4,20 +4,31 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codi-analyzer"
-version = "2.0.0"
-description = "Zero-dependency Python code-health analyzer: complexity, hotspots, import graph, HTML reports"
+description = "Zero-dependency Python code-health analyzer: complexity, churn risk, clone & dead-code detection, import graph, trend tracking, HTML/markdown reports and badges"
 readme = "README.md"
 license = { text = "MIT" }
-authors = [{ name = "Abdurehman", email = "mumabdu@gmail.com" }]
+authors = [{ name = "Abdurehman Muhammed", email = "mumabdu@gmail.com" }]
 requires-python = ">=3.10"
-keywords = ["static-analysis", "code-quality", "cyclomatic-complexity", "linter", "ast"]
+dynamic = ["version"]
+keywords = [
+    "static-analysis", "code-quality", "cyclomatic-complexity", "linter",
+    "ast", "code-health", "technical-debt", "dead-code", "clone-detection",
+    "churn", "maintainability", "radon-alternative",
+]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
 ]
 
 [project.scripts]
@@ -25,6 +36,14 @@ codi = "codi.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Ibnuawf/codi"
+Repository = "https://github.com/Ibnuawf/codi"
+Issues = "https://github.com/Ibnuawf/codi/issues"
 
 [tool.setuptools]
 packages = ["codi"]
+
+[tool.setuptools.package-data]
+codi = ["py.typed"]
+
+[tool.setuptools.dynamic]
+version = { attr = "codi.__version__" }

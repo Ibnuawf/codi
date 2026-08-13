@@ -28,4 +28,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Codi analyzes itself and must stay healthy
-        run: python -m codi codi --fail-under 70
+        run: python -m codi codi --fail-under 70 --md codi-report.md --badge codi-badge.svg
+      - name: Publish self-report to the job summary
+        run: cat codi-report.md >> "$GITHUB_STEP_SUMMARY"

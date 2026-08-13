@@ -23,8 +23,8 @@ class Delta:
 
     @property
     def improved(self) -> bool:
-        lower_is_better = {"avg_complexity", "cycles", "hotspots", "dead_functions",
-                           "clone_groups"}
+        lower_is_better = {"avg_complexity", "avg_cognitive", "cycles", "hotspots",
+                           "dead_functions", "clone_groups"}
         if self.metric in lower_is_better:
             return self.after < self.before
         return self.after > self.before
@@ -40,6 +40,8 @@ def snapshot(health: HealthReport, extra: dict | None = None) -> dict:
         "functions": health.total_functions,
         "avg_complexity": health.avg_complexity,
         "docstring_coverage": health.docstring_coverage,
+        "annotation_coverage": health.annotation_coverage,
+        "avg_cognitive": health.avg_cognitive,
         "cycles": len(health.cycles),
         "hotspots": len(health.hotspots),
     }

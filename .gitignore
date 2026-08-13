@@ -7,3 +7,6 @@ build/
 report.html
 report.json
 codi-baseline.json
+graphify-out/
+codi-history.json
+.pytest_cache/

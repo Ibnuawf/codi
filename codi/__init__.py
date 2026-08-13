@@ -5,4 +5,4 @@ complexity metrics, an import dependency graph, hotspot rankings,
 and a self-contained HTML report.
 """
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"

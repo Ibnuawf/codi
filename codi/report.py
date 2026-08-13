@@ -9,6 +9,7 @@ import json
 from .analyzer import FileMetrics
 from .graph import DependencyGraph
 from .scoring import HealthReport
+from .viz import dependency_svg, treemap_svg, trend_svg
 
 _GRADE_COLORS = {"A": "#22c55e", "B": "#84cc16", "C": "#eab308", "D": "#f97316", "F": "#ef4444"}
 
@@ -96,9 +97,11 @@ def _hotspot_rows(health: HealthReport) -> str:
     return "".join(
         f"<tr><td>{e(h.function.qualname)}</td><td class='muted'>{e(h.file)}:{h.function.lineno}</td>"
         f"<td>{_grade_pill(h.function.grade)}</td><td>{h.function.complexity}</td>"
-        f"<td>{h.function.length}</td><td class='muted'>{e('; '.join(h.reasons))}</td></tr>"
+        f"<td>{h.function.cognitive}</td>"
+        f"<td>{h.function.length}</td><td class='muted'>{e('; '.join(h.reasons))}</td>"
+        f"<td class='muted'>{e(h.advice)}</td></tr>"
         for h in health.hotspots
-    ) or "<tr><td colspan='6' class='ok'>No risky functions found — clean codebase.</td></tr>"
+    ) or "<tr><td colspan='8' class='ok'>No risky functions found — clean codebase.</td></tr>"
 
 
 def _file_rows(files: list[FileMetrics]) -> str:
@@ -145,11 +148,23 @@ def _dead_rows(health: HealthReport) -> str:
     ) or "<tr><td colspan='2' class='ok'>✓ No unreferenced functions detected.</td></tr>"
 
 
+def _churn_rows(churn_ranking) -> str:
+    """Table rows for the churn-risk section."""
+    e = html.escape
+    return "".join(
+        f"<tr><td>{e(path)}</td><td>{commits}</td><td>{cx:.1f}</td>"
+        f"<td><b>{risk}</b></td></tr>"
+        for path, commits, cx, risk in churn_ranking[:15]
+    )
+
+
 def render_html(
     target: str,
     files: list[FileMetrics],
     graph: DependencyGraph,
     health: HealthReport,
+    churn_ranking: list | None = None,
+    history: list[dict] | None = None,
 ) -> str:
     """Render the full analysis as one self-contained HTML page."""
     e = html.escape
@@ -170,6 +185,32 @@ def render_html(
         if health.parse_errors else ""
     )
 
+    trend_chart = trend_svg(history or [])
+    trend_html = f"<h2>Health trend</h2>{trend_chart}" if trend_chart else ""
+
+    treemap = treemap_svg(files)
+    treemap_html = (
+        "<h2>Codebase map <span class='muted' style='font-size:.8rem'>"
+        "(area = SLOC, color = avg complexity)</span></h2>" + treemap
+        if treemap else ""
+    )
+
+    dep_svg = dependency_svg(graph, health.cycles)
+    dep_svg_html = (
+        "<h2>Dependency graph <span class='muted' style='font-size:.8rem'>"
+        "(node size = fan-in, red = cycle)</span></h2>"
+        f"<div style='text-align:center'>{dep_svg}</div>"
+        if dep_svg else ""
+    )
+
+    churn_html = (
+        "<h2>Churn risk <span class='muted' style='font-size:.8rem'>"
+        "(git commits × complexity — fix these first)</span></h2>"
+        "<div class='overflow'><table><tr><th>File</th><th>Commits (12mo)</th>"
+        f"<th>Avg CC</th><th>Risk</th></tr>{_churn_rows(churn_ranking)}</table></div>"
+        if churn_ranking else ""
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -180,7 +221,7 @@ def render_html(
 
 <div class="score">{_ring(health.score, health.grade)}
 <div><div style="font-size:1.2rem;font-weight:700">Overall health: {health.score}/100</div>
-<div class="muted">Blend of complexity (40), hotspot density (25), documentation (20), import structure (15).</div></div></div>
+<div class="muted">Blend of complexity (35), hotspot density (20), documentation (15), import structure (10), duplication (10), dead code (10).</div></div></div>
 
 <div class="cards">
 {_card("Files", str(health.total_files))}
@@ -188,16 +229,25 @@ def render_html(
 {_card("Functions", str(health.total_functions))}
 {_card("Avg complexity", f"{health.avg_complexity:.2f}")}
 {_card("Docstring coverage", f"{health.docstring_coverage:.0%}")}
+{_card("Type-hint coverage", f"{health.annotation_coverage:.0%}")}
+{_card("Avg cognitive", f"{health.avg_cognitive:.1f}")}
 {_card("Import cycles", str(len(health.cycles)))}
 {_card("Duplication", f"{health.duplication:.0%}")}
 {_card("Dead functions", str(len(health.dead_functions)))}
 </div>
 
+{trend_html}
+{treemap_html}
+
 <h2>Refactoring hotspots</h2>
-<div class="overflow"><table><tr><th>Function</th><th>Location</th><th>Grade</th><th>CC</th><th>Lines</th><th>Why</th></tr>{hotspot_rows}</table></div>
+<div class="overflow"><table><tr><th>Function</th><th>Location</th><th>Grade</th><th>CC</th><th>Cognitive</th><th>Lines</th><th>Why</th><th>Advice</th></tr>{hotspot_rows}</table></div>
 
 <h2>Files</h2>
 <div class="overflow"><table><tr><th>File</th><th>SLOC</th><th></th><th>Funcs</th><th>Avg CC</th><th>Max CC</th><th>MI</th><th>Docs</th></tr>{file_rows}</table></div>
+
+{churn_html}
+
+{dep_svg_html}
 
 <h2>Internal dependencies</h2>
 <div class="overflow"><table><tr><th>Module</th><th>Fan-in</th><th>Fan-out</th><th>Imports</th></tr>{dep_rows}</table></div>
@@ -218,7 +268,8 @@ def render_html(
 
 
 def render_json(
-    target: str, files: list[FileMetrics], graph: DependencyGraph, health: HealthReport
+    target: str, files: list[FileMetrics], graph: DependencyGraph,
+    health: HealthReport, churn_ranking: list | None = None,
 ) -> str:
     """Machine-readable summary of the same analysis."""
     return json.dumps(
@@ -232,6 +283,8 @@ def render_json(
                 "functions": health.total_functions,
                 "avg_complexity": health.avg_complexity,
                 "docstring_coverage": health.docstring_coverage,
+                "annotation_coverage": health.annotation_coverage,
+                "avg_cognitive": health.avg_cognitive,
                 "cycles": health.cycles,
                 "parse_errors": health.parse_errors,
                 "duplication": health.duplication,
@@ -247,6 +300,10 @@ def render_json(
                 }
                 for g in health.clone_groups
             ],
+            "churn_risk": [
+                {"file": path, "commits": commits, "avg_complexity": cx, "risk": risk}
+                for path, commits, cx, risk in (churn_ranking or [])
+            ],
             "dead_functions": [
                 {"file": d.file, "function": d.qualname, "line": d.lineno}
                 for d in health.dead_functions
@@ -257,9 +314,11 @@ def render_json(
                     "function": h.function.qualname,
                     "line": h.function.lineno,
                     "complexity": h.function.complexity,
+                    "cognitive": h.function.cognitive,
                     "grade": h.function.grade,
                     "risk": h.risk,
                     "reasons": h.reasons,
+                    "advice": h.advice,
                 }
                 for h in health.hotspots
             ],
