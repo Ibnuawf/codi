@@ -10,6 +10,7 @@ self-contained HTML report with an **SVG dependency graph, codebase treemap and
 health-trend chart** — using nothing but the Python standard library.
 
 ![CI](https://github.com/Ibnuawf/codi/actions/workflows/ci.yml/badge.svg)
+[![PyPI](https://img.shields.io/pypi/v/codi-analyzer)](https://pypi.org/project/codi-analyzer/)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
